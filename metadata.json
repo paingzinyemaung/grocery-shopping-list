@@ -1,0 +1,6 @@
+{
+  "name": "Grocery Shopping List",
+  "description": "A clean, modern, and responsive grocery shopping list application with local storage persistence, categories, filtering, and a dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
