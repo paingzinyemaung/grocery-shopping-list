@@ -89,9 +89,19 @@ export default function GroceryItemCard({
           )}
 
           {/* Created Date */}
-          <div className="flex items-center gap-1 mt-2 text-[11px] text-zinc-400 dark:text-zinc-500 font-medium">
-            <Calendar className="w-3.5 h-3.5" />
-            <span>Added {dateFormatted}</span>
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 mt-2 text-[11px] text-zinc-400 dark:text-zinc-500 font-medium">
+            <div className="flex items-center gap-1">
+              <Calendar className="w-3.5 h-3.5" />
+              <span>Added {dateFormatted}</span>
+            </div>
+            {item.addedBy && (
+              <div className="flex items-center gap-1">
+                <span>•</span>
+                <span className="bg-zinc-100 dark:bg-zinc-800/80 px-1.5 py-0.5 rounded text-zinc-500 dark:text-zinc-400 font-semibold">
+                  {item.addedBy.split('@')[0].charAt(0).toUpperCase() + item.addedBy.split('@')[0].slice(1)}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -5,6 +5,7 @@ export interface GroceryItem {
   category?: GroceryCategory;
   completed: boolean;
   createdAt: string; // ISO String
+  addedBy?: string; // Email of the user who added this item
 }
 
 export type GroceryCategory =

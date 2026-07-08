@@ -13,6 +13,9 @@ import {
   AlertCircle,
   HelpCircle,
   TrendingUp,
+  LogOut,
+  Database,
+  Terminal,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -27,6 +30,8 @@ import {
   CATEGORY_STYLES,
 } from './types';
 
+import { supabase } from './lib/supabase';
+import Auth from './components/Auth';
 import Dashboard from './components/Dashboard';
 import GroceryForm from './components/GroceryForm';
 import GroceryItemCard from './components/GroceryItemCard';
@@ -36,52 +41,22 @@ import ToastContainer from './components/ToastContainer';
 
 export default function App() {
   // ----------------------------------------------------
-  // States & Local Storage Initialization
+  // Authentication & Supabase Setup
   // ----------------------------------------------------
-  const [items, setItems] = useState<GroceryItem[]>(() => {
-    const saved = localStorage.getItem('grocery_items');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.error('Error parsing stored grocery items', e);
-      }
-    }
-    // Default initial items for an elegant starting look if empty
-    return [
-      {
-        id: '1',
-        name: 'Organic Honeycrisp Apples',
-        note: 'Get a bag of 5 or 6 medium-sized',
-        category: 'Fruits',
-        completed: false,
-        createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-      },
-      {
-        id: '2',
-        name: 'Whole Milk 2%',
-        note: 'Check the expiry date!',
-        category: 'Dairy',
-        completed: true,
-        createdAt: new Date(Date.now() - 3600000 * 12).toISOString(),
-      },
-      {
-        id: '3',
-        name: 'Sourdough Bread',
-        note: 'Freshly baked if possible',
-        category: 'Bakery',
-        completed: false,
-        createdAt: new Date(Date.now() - 3600000 * 24).toISOString(),
-      },
-    ];
-  });
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [dbError, setDbError] = useState<string | null>(null);
+
+  // ----------------------------------------------------
+  // Local Storage Backed State (used as fallback or offline)
+  // ----------------------------------------------------
+  const [items, setItems] = useState<GroceryItem[]>([]);
 
   const [theme, setTheme] = useState<Theme>(() => {
     const savedTheme = localStorage.getItem('grocery_theme') as Theme | null;
     if (savedTheme === 'light' || savedTheme === 'dark') {
       return savedTheme;
     }
-    // Default to system preference
     if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
       return 'dark';
     }
@@ -121,10 +96,156 @@ export default function App() {
   const [activeNavSection, setActiveNavSection] = useState<'dashboard' | 'add-item' | 'list'>('list');
 
   // ----------------------------------------------------
-  // Syncing with Local Storage & Theme Application
+  // Toast Notification Trigger Helper
   // ----------------------------------------------------
+  const addToast = (message: string, type: 'success' | 'info' | 'warning' | 'error' = 'success') => {
+    const id = Math.random().toString(36).substring(2, 9);
+    setToasts((prev) => [...prev, { id, message, type }]);
+  };
+
+  const removeToast = (id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  // Check auth session on load
   useEffect(() => {
-    localStorage.setItem('grocery_items', JSON.stringify(items));
+    if (!supabase) {
+      // If Supabase isn't configured, default to guest state
+      setAuthChecking(false);
+      return;
+    }
+
+    const checkSession = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        setCurrentUser(session?.user ?? null);
+      } catch (err) {
+        console.error('Session check failed', err);
+      } finally {
+        setAuthChecking(false);
+      }
+    };
+
+    checkSession();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCurrentUser(session?.user ?? null);
+      setAuthChecking(false);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  // ----------------------------------------------------
+  // Database Synchronization
+  // ----------------------------------------------------
+  const fetchItemsFromDB = async () => {
+    if (!supabase || !currentUser) return;
+    try {
+      const { data, error } = await supabase
+        .from('grocery_items')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        // Table not found code is "42P01" in PG/Supabase
+        if (error.code === '42P01') {
+          setDbError('table_not_found');
+        } else {
+          setDbError(error.message);
+        }
+        return;
+      }
+
+      setDbError(null);
+      if (data) {
+        const mapped: GroceryItem[] = data.map((row: any) => ({
+          id: row.id,
+          name: row.name,
+          note: row.note || undefined,
+          category: (row.category as GroceryCategory) || undefined,
+          completed: row.completed,
+          createdAt: row.created_at,
+          addedBy: row.added_by || undefined,
+        }));
+        setItems(mapped);
+      }
+    } catch (err: any) {
+      console.error('Fetch error:', err);
+    }
+  };
+
+  // Sync / Real-time Subscription
+  useEffect(() => {
+    if (!supabase || !currentUser) {
+      // Fallback to local storage when offline/not logged in
+      const saved = localStorage.getItem('grocery_items');
+      if (saved) {
+        try {
+          setItems(JSON.parse(saved));
+        } catch (e) {
+          console.error(e);
+        }
+      } else {
+        // Default initial items
+        setItems([
+          {
+            id: '1',
+            name: 'Organic Honeycrisp Apples',
+            note: 'Get a bag of 5 or 6 medium-sized',
+            category: 'Fruits',
+            completed: false,
+            createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
+            addedBy: 'dad@family.com',
+          },
+          {
+            id: '2',
+            name: 'Whole Milk 2%',
+            note: 'Check the expiry date!',
+            category: 'Dairy',
+            completed: true,
+            createdAt: new Date(Date.now() - 3600000 * 12).toISOString(),
+            addedBy: 'mom@family.com',
+          },
+          {
+            id: '3',
+            name: 'Sourdough Bread',
+            note: 'Freshly baked if possible',
+            category: 'Bakery',
+            completed: false,
+            createdAt: new Date(Date.now() - 3600000 * 24).toISOString(),
+            addedBy: 'kid@family.com',
+          },
+        ]);
+      }
+      return;
+    }
+
+    fetchItemsFromDB();
+
+    const channel = supabase
+      .channel('grocery_realtime_changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'grocery_items' },
+        () => {
+          fetchItemsFromDB();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentUser]);
+
+  // Save to local storage as double-backup
+  useEffect(() => {
+    if (items.length > 0) {
+      localStorage.setItem('grocery_items', JSON.stringify(items));
+    }
   }, [items]);
 
   useEffect(() => {
@@ -161,22 +282,19 @@ export default function App() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  // ----------------------------------------------------
-  // Toast Notification Trigger Helper
-  // ----------------------------------------------------
-  const addToast = (message: string, type: 'success' | 'info' | 'warning' | 'error' = 'success') => {
-    const id = Math.random().toString(36).substring(2, 9);
-    setToasts((prev) => [...prev, { id, message, type }]);
-  };
-
-  const removeToast = (id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+  // Logout handler
+  const handleSignOut = async () => {
+    if (supabase) {
+      await supabase.auth.signOut();
+      addToast('Signed out successfully', 'info');
+    }
+    setCurrentUser(null);
   };
 
   // ----------------------------------------------------
   // Grocery List Operations
   // ----------------------------------------------------
-  const handleAddItem = (newItem: { name: string; note?: string; category?: GroceryCategory }) => {
+  const handleAddItem = async (newItem: { name: string; note?: string; category?: GroceryCategory }) => {
     const item: GroceryItem = {
       id: Math.random().toString(36).substring(2, 9),
       name: newItem.name,
@@ -184,27 +302,67 @@ export default function App() {
       category: newItem.category,
       completed: false,
       createdAt: new Date().toISOString(),
+      addedBy: currentUser?.email || 'Guest',
     };
+
+    // Always update client state immediately (optimistic UI)
     setItems((prev) => [item, ...prev]);
+
+    // Save to database
+    if (supabase && currentUser && dbError !== 'table_not_found') {
+      try {
+        const { error } = await supabase.from('grocery_items').insert({
+          id: item.id,
+          name: item.name,
+          note: item.note || null,
+          category: item.category || null,
+          completed: item.completed,
+          created_at: item.createdAt,
+          added_by: item.addedBy,
+        });
+        if (error) throw error;
+      } catch (err: any) {
+        console.error('Error adding item to Supabase:', err);
+        addToast('Database save failed. Item saved locally.', 'warning');
+      }
+    }
   };
 
-  const handleToggleComplete = (id: string) => {
+  const handleToggleComplete = async (id: string) => {
+    let nextState = false;
+    let itemName = '';
+
     setItems((prev) =>
       prev.map((item) => {
         if (item.id === id) {
-          const nextState = !item.completed;
-          addToast(
-            `"${item.name}" marked as ${nextState ? 'purchased' : 'active'}`,
-            nextState ? 'info' : 'success'
-          );
+          nextState = !item.completed;
+          itemName = item.name;
           return { ...item, completed: nextState };
         }
         return item;
       })
     );
+
+    addToast(
+      `"${itemName}" marked as ${nextState ? 'purchased' : 'active'}`,
+      nextState ? 'info' : 'success'
+    );
+
+    // Save to database
+    if (supabase && currentUser && dbError !== 'table_not_found') {
+      try {
+        const { error } = await supabase
+          .from('grocery_items')
+          .update({ completed: nextState })
+          .eq('id', id);
+        if (error) throw error;
+      } catch (err: any) {
+        console.error('Error toggling complete in Supabase:', err);
+      }
+    }
   };
 
-  const handleSaveEdit = (
+  const handleSaveEdit = async (
     id: string,
     updatedData: { name: string; note?: string; category?: GroceryCategory }
   ) => {
@@ -221,6 +379,23 @@ export default function App() {
         return item;
       })
     );
+
+    // Save to database
+    if (supabase && currentUser && dbError !== 'table_not_found') {
+      try {
+        const { error } = await supabase
+          .from('grocery_items')
+          .update({
+            name: updatedData.name,
+            note: updatedData.note || null,
+            category: updatedData.category || null,
+          })
+          .eq('id', id);
+        if (error) throw error;
+      } catch (err: any) {
+        console.error('Error saving edit in Supabase:', err);
+      }
+    }
   };
 
   const handleDeleteItem = (itemToDelete: GroceryItem) => {
@@ -231,10 +406,22 @@ export default function App() {
       confirmLabel: 'Delete Item',
       cancelLabel: 'Keep It',
       type: 'danger',
-      action: () => {
+      action: async () => {
         setItems((prev) => prev.filter((item) => item.id !== itemToDelete.id));
         addToast(`"${itemToDelete.name}" was deleted.`, 'error');
         setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+
+        if (supabase && currentUser && dbError !== 'table_not_found') {
+          try {
+            const { error } = await supabase
+              .from('grocery_items')
+              .delete()
+              .eq('id', itemToDelete.id);
+            if (error) throw error;
+          } catch (err: any) {
+            console.error('Error deleting item from Supabase:', err);
+          }
+        }
       },
     });
   };
@@ -253,10 +440,22 @@ export default function App() {
       confirmLabel: 'Clear All',
       cancelLabel: 'Keep Items',
       type: 'danger',
-      action: () => {
+      action: async () => {
         setItems((prev) => prev.filter((item) => !item.completed));
         addToast(`Cleared ${purchasedCount} purchased items.`, 'success');
         setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+
+        if (supabase && currentUser && dbError !== 'table_not_found') {
+          try {
+            const { error } = await supabase
+              .from('grocery_items')
+              .delete()
+              .eq('completed', true);
+            if (error) throw error;
+          } catch (err: any) {
+            console.error('Error clearing items from Supabase:', err);
+          }
+        }
       },
     });
   };
@@ -272,7 +471,7 @@ export default function App() {
   const filteredAndSortedItems = useMemo(() => {
     let result = [...items];
 
-    // 1. Text Search Filter (Case insensitive)
+    // 1. Text Search Filter
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       result = result.filter(
@@ -324,6 +523,53 @@ export default function App() {
       setActiveNavSection(section);
     }
   };
+
+  // SQL Script for setup to display to user
+  const setupSql = `create table grocery_items (
+  id text primary key,
+  name text not null,
+  note text,
+  category text,
+  completed boolean default false,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  added_by text
+);
+
+-- Enable Row Level Security (RLS)
+alter table grocery_items enable row level security;
+
+-- Create policy to allow all authenticated family members to share list
+create policy "Allow all actions for authenticated users" 
+on grocery_items 
+for all 
+to authenticated 
+using (true) 
+with check (true);`;
+
+  // Auth Guard Screen
+  if (authChecking) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-zinc-50 dark:bg-zinc-950 transition-colors">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 text-emerald-500 flex items-center justify-center animate-pulse">
+            <ShoppingBag className="w-6 h-6 animate-spin duration-1000" />
+          </div>
+          <p className="text-sm font-semibold text-zinc-500 dark:text-zinc-400">
+            Checking family session...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <>
+        <ToastContainer toasts={toasts} onRemove={removeToast} />
+        <Auth onAuthSuccess={(user) => setCurrentUser(user)} addToast={addToast} />
+      </>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 font-sans text-zinc-800 dark:text-zinc-200 transition-colors duration-300">
@@ -379,6 +625,12 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* User display badge */}
+            <div className="hidden sm:flex items-center gap-1.5 bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200/20 px-3 py-1.5 rounded-xl text-xs font-semibold text-zinc-600 dark:text-zinc-300 select-none">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span>{currentUser.email.split('@')[0]}</span>
+            </div>
+
             {/* Theme Toggle Button */}
             <button
               onClick={toggleTheme}
@@ -387,6 +639,16 @@ export default function App() {
               id="theme-toggle-btn"
             >
               {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
+            </button>
+
+            {/* Logout Button */}
+            <button
+              onClick={handleSignOut}
+              className="p-2.5 rounded-xl border border-zinc-200/60 dark:border-zinc-800 bg-rose-50 hover:bg-rose-100/80 dark:bg-zinc-900 dark:hover:bg-zinc-800 text-rose-600 dark:text-rose-400 hover:text-rose-700 transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-rose-500/30"
+              title="Sign Out"
+              id="signout-btn"
+            >
+              <LogOut className="w-5 h-5" />
             </button>
           </div>
         </div>
@@ -436,6 +698,50 @@ export default function App() {
 
       {/* MAIN CONTAINER */}
       <main className="max-w-4xl mx-auto px-4 sm:px-6 py-8 space-y-8" id="main-content">
+        
+        {/* DATABASE SETUP WARNING / INSTRUCTION BANNER */}
+        {dbError === 'table_not_found' && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="p-5 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 rounded-3xl space-y-3 shadow-sm"
+            id="db-setup-warning"
+          >
+            <div className="flex items-start gap-3">
+              <Database className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <h4 className="text-sm font-bold text-amber-800 dark:text-amber-300">
+                  Supabase Table Setup Required
+                </h4>
+                <p className="text-xs text-amber-700 dark:text-amber-400/90 mt-1 leading-relaxed">
+                  Your family accounts are active, but the shared <code className="bg-amber-100/60 dark:bg-amber-900/35 px-1 py-0.5 rounded">grocery_items</code> table hasn't been created yet on your Supabase project. The application is running in local-only fallback mode until the table is initialized.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-3 bg-zinc-950 rounded-2xl p-4 overflow-x-auto border border-zinc-800 relative group">
+              <div className="flex items-center justify-between mb-2 text-[10px] uppercase font-bold text-zinc-500 tracking-wider">
+                <span className="flex items-center gap-1.5"><Terminal className="w-3.5 h-3.5" /> Supabase SQL Editor Code</span>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(setupSql);
+                    addToast('SQL script copied to clipboard!', 'info');
+                  }}
+                  className="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded hover:text-white transition-colors cursor-pointer"
+                >
+                  Copy Code
+                </button>
+              </div>
+              <pre className="text-xs font-mono text-emerald-400 dark:text-emerald-400 select-all leading-normal whitespace-pre-wrap">
+                {setupSql}
+              </pre>
+            </div>
+            <p className="text-[10px] text-amber-600 dark:text-amber-500/80 leading-normal pl-8">
+              💡 <strong>How to deploy:</strong> Simply copy the SQL script above, navigate to your <strong>Supabase Dashboard &gt; SQL Editor</strong>, paste it, and click <strong>Run</strong>. The list will automatically sync in real-time as soon as the table goes live!
+            </p>
+          </motion.div>
+        )}
+
         {/* DASHBOARD MODULE */}
         <Dashboard items={items} />
 
@@ -453,9 +759,17 @@ export default function App() {
               <div className="p-2 bg-indigo-50 dark:bg-indigo-950/40 rounded-xl text-indigo-600 dark:text-indigo-400">
                 <ListTodo className="w-5 h-5" />
               </div>
-              <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-50">
-                Shopping List
-              </h3>
+              <div>
+                <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-50">
+                  Shared Family List
+                </h3>
+                {supabase && !dbError && (
+                  <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1 mt-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+                    <span>Connected to Supabase (Real-time Synced)</span>
+                  </p>
+                )}
+              </div>
             </div>
 
             {/* Clear Purchased button */}
@@ -473,7 +787,7 @@ export default function App() {
           {/* SEARCH, SORT, FILTER TOOLBAR */}
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-              {/* Search input (7 cols) */}
+              {/* Search input */}
               <div className="md:col-span-6 relative">
                 <Search className="absolute left-3.5 top-3.5 w-4 h-4 text-zinc-400 dark:text-zinc-500" />
                 <input
@@ -486,7 +800,7 @@ export default function App() {
                 />
               </div>
 
-              {/* Status Filter Dropdown (3 cols) */}
+              {/* Status Filter Dropdown */}
               <div className="md:col-span-3 relative">
                 <Filter className="absolute left-3 top-3 w-4 h-4 text-zinc-400" />
                 <select
@@ -506,7 +820,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Sort Dropdown (3 cols) */}
+              {/* Sort Dropdown */}
               <div className="md:col-span-3 relative">
                 <ArrowUpDown className="absolute left-3 top-3 w-4 h-4 text-zinc-400" />
                 <select
@@ -635,8 +949,8 @@ export default function App() {
       {/* FOOTER */}
       <footer className="bg-white dark:bg-zinc-900 border-t border-zinc-100 dark:border-zinc-800 mt-16 py-8 transition-colors">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 text-center text-xs text-zinc-400 dark:text-zinc-500 font-medium">
-          <p>© 2026 Grocery Shopping List. Simple. Fast. Private.</p>
-          <p className="mt-1">All data persists securely in your local browser storage.</p>
+          <p>© 2026 Shared Family Grocery Shopping List. Collaborative. Real-time.</p>
+          <p className="mt-1">All database state is stored securely in your private cloud instance.</p>
         </div>
       </footer>
     </div>
