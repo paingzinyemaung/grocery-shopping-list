@@ -1,20 +1,46 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# 🛒 Grocery Shopping List
 
-# Run and deploy your AI Studio app
+A modern and responsive grocery shopping list application that helps you organize your shopping with ease. Create, manage, and track your grocery items anytime.
 
-This contains everything you need to run your app locally.
+## ✨ Features
 
-View your app in AI Studio: https://ai.studio/apps/5d90b9ef-118d-4e32-ac15-e086faebc17e
+- Add, edit, and delete grocery items
+- Optional notes and categories
+- Mark items as purchased
+- Search, filter, and sort items
+- Dashboard with shopping statistics
+- Dark & Light mode
+- Responsive design
+- Real-time synchronization
 
-## Run Locally
+## 🛠️ Tech Stack
 
-**Prerequisites:**  Node.js
+- React
+- TypeScript
+- Tailwind CSS
+- Vite
+- Supabase
 
+## 🚀 Getting Started
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+```bash
+git clone https://github.com/paingzinyemaung/grocery-shopping-list.git
+
+cd grocery-shopping-list
+
+npm install
+
+npm run dev
+```
+
+## 🌐 Live Demo
+
+https://shopping-lst.vercel.app/
+
+## 👨‍💻 Author
+
+**Paing Zin Ye Maung**
+
+---
+
+⭐ Feel free to star this repository if you found it useful!
